@@ -8,9 +8,12 @@
 #include "com_ptr.h"
 #include "win_util.h"
 
-// taskschd.lib is only needed by MSVC; CMake lists it for every toolchain.
+// Only the interfaces' vtables are used, and the CLSID/IID values below are
+// spelled by hand, so nothing has to be imported from taskschd.dll: this file
+// needs no taskschd.lib / uuid.lib, which also keeps it linkable with a
+// toolchain that has no import library for that DLL. CoCreateInstance and the
+// BSTR helpers do come from ole32.
 #if defined(_MSC_VER)
-#pragma comment(lib, "taskschd.lib")
 #pragma comment(lib, "ole32.lib")
 #endif
 

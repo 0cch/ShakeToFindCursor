@@ -111,7 +111,8 @@ remembered.
 
 ## Building
 
-Requires only the Windows SDK - no third-party dependencies, and no ATL.
+Requires only the Windows SDK - no third-party dependencies, no ATL, and no
+Visual C++ redistributable (the CRT is linked statically by both toolchains).
 
 ```
 cmake -S . -B build

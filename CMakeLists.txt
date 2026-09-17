@@ -8,6 +8,14 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# The app ships as one bare .exe, so the CRT is linked in rather than referenced
+# (otherwise a fresh Windows box without the Visual C++ redistributable gets
+# "VCRUNTIME140.dll was not found" on first double-click).
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY
+        "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 option(STFC_BUILD_TESTS "Build the detector unit tests (run with ctest)" ON)
 option(STFC_STRICT_WARNINGS "Treat warnings as errors when building" ON)
 option(STFC_REQUIRE_ADMIN
@@ -79,6 +87,14 @@ add_executable(${PROJECT_NAME}
 
 target_include_directories(${PROJECT_NAME} PRIVATE src)
 
+# The five DLLs the app really imports. MSVC additionally picks ole32 up from
+# the #pragma comment in src/auto_start.cpp, which is harmless. Notably absent
+# is taskschd: the Task Scheduler API is used through COM interfaces obtained
+# from CoCreateInstance, so no import library is required (and a toolchain
+# without one, like the many MinGW builds, still links).
+target_link_libraries(${PROJECT_NAME} PRIVATE
+    user32 gdi32 shell32 ole32 oleaut32 advapi32)
+
 if(MSVC)
     target_compile_options(${PROJECT_NAME} PRIVATE
         /W4
@@ -99,12 +115,11 @@ else()
     if(STFC_STRICT_WARNINGS)
         target_compile_options(${PROJECT_NAME} PRIVATE -Werror)
     endif()
-    # The Task Scheduler COM API, plus the COM runtime the AutoStart code
-    # initializes on demand. MSVC gets these from the #pragma comment lines.
-    target_link_libraries(${PROJECT_NAME} PRIVATE
-        taskschd ole32 oleaut32 shell32)
-    # Picks the startup object that calls wWinMain instead of WinMain.
-    target_link_options(${PROJECT_NAME} PRIVATE "-municode")
+    # -municode picks the startup object that calls wWinMain instead of
+    # WinMain; the -static flags keep libgcc/libstdc++/libwinpthread out of the
+    # result so the MinGW build is a single file as well.
+    target_link_options(${PROJECT_NAME} PRIVATE
+        -municode -static -static-libgcc -static-libstdc++)
 endif()
 
 message(STATUS "ShakeToFindCursor ${PROJECT_VERSION}: manifest "
