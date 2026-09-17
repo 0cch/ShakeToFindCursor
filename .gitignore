@@ -36,3 +36,5 @@
 
 # Build files
 build/*
+# Generated resources
+*.res
