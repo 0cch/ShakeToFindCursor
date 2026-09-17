@@ -1,65 +1,88 @@
-name: Release Build
+name: CI
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  # The detection algorithm has no Windows dependency, so its regression suite
+  # runs on Linux in a couple of seconds.
+  detector-tests:
+    name: Shake detector tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DSTFC_BUILD_TESTS=ON
+      - name: Build tests
+        run: cmake --build build --target shake_detector_tests
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+  windows:
+    name: Windows (${{ matrix.arch }})
     runs-on: windows-latest
     strategy:
       matrix:
-        arch: [x64, x86]
-
+        arch: [x64, Win32]
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Visual Studio shell
-      uses: egor-tensin/vs-shell@v2
-      with:
-        arch: ${{ matrix.arch }}
+      - name: Configure
+        run: cmake -S . -B build -A ${{ matrix.arch }}
 
-    - name: Create Build Directory
-      run: cmake -E make_directory ${{github.workspace}}/build
+      - name: Build
+        run: cmake --build build --config Release
 
-    - name: Configure CMake
-      working-directory: ${{github.workspace}}/build
-      run: cmake .. -A ${{ matrix.arch=='x64' && 'x64' || 'Win32' }}
+      - name: Run tests (MSVC)
+        run: ctest --test-dir build -C Release --output-on-failure
 
-    - name: Build
-      working-directory: ${{github.workspace}}/build
-      run: cmake --build . --config Release
+      - name: Check the manifest really is embedded
+        shell: pwsh
+        run: |
+          $exe = "build/Release/ShakeToFindCursor.exe"
+          Get-Item $exe | Select-Object Name, Length
+          $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $exe))
+          $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+          if (-not $text.Contains('PerMonitorV2')) {
+            throw "the embedded manifest does not declare PerMonitorV2"
+          }
 
-    - name: Package
-      run: |
-        mkdir publish
-        cp build/Release/ShakeToFindCursor.exe "publish/ShakeToFindCursor-${{ matrix.arch }}.exe" || true
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path publish | Out-Null
+          $arch = "${{ matrix.arch }}".ToLower()
+          Copy-Item build/Release/ShakeToFindCursor.exe "publish/ShakeToFindCursor-$arch.exe"
+          Get-ChildItem publish
 
-    - name: Upload Artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: ShakeToFindCursor-${{ matrix.arch }}
-        path: publish/*
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShakeToFindCursor-${{ matrix.arch }}
+          path: publish/*
 
   release:
-    needs: build
+    name: GitHub release
+    needs: [windows, detector-tests]
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
     steps:
-    - name: Download Artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-        merge-multiple: true
-
-    - name: Create Release
-      uses: softprops/action-gh-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        files: artifacts/*.exe
-        draft: false
-        prerelease: false
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.exe
+          draft: false
+          prerelease: false
+          generate_release_notes: true
