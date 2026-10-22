@@ -295,7 +295,7 @@ class CursorUtils {
     return (HCURSOR)LoadImageW(nullptr, fallback_id, IMAGE_CURSOR, target_w, target_h, (target_w == 0 && target_h == 0) ? (LR_DEFAULTSIZE | LR_SHARED) : LR_SHARED);
   }
 
-  static HCURSOR ScaleCursor(HCURSOR src_cursor, const std::wstring& file_path, LPCWSTR fallback_id, double scale_factor, int base_w, int base_h) {
+  static HCURSOR ScaleCursor(HCURSOR src_cursor, const std::wstring& file_path, double scale_factor, int base_w, int base_h) {
     if (scale_factor <= 1.0001) {
       return src_cursor;
     }
@@ -369,7 +369,7 @@ class LargeCursor {
       return;
     }
 
-    HCURSOR scaled = CursorUtils::ScaleCursor(original_cursor_, cursor_path_, fallback_cursor_id_, scale_factor, base_width_, base_height_);
+    HCURSOR scaled = CursorUtils::ScaleCursor(original_cursor_, cursor_path_, scale_factor, base_width_, base_height_);
     if (scaled) {
       HCURSOR cursor_copy = CopyCursor(scaled);
       DestroyCursor(scaled);
