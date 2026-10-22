@@ -2,6 +2,7 @@ name: Build & Release
 
 on:
   push:
+    branches: [ "main" ]
     tags:
       - 'v*'
   workflow_dispatch:
@@ -56,11 +57,19 @@ jobs:
         path: artifacts
         merge-multiple: true
 
-    - name: Create Release
+    - name: Create or Overwrite Release
       uses: softprops/action-gh-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
+        tag_name: v1.4.0
+        name: "v1.4.0: Support custom cursor themes with high-res multi-frame scaling"
+        body: |
+          ### What's Changed
+          - Automatically detect active Windows cursor theme from registry (`HKCU\Control Panel\Cursors`)
+          - Dynamically load highest matching resolution frame from custom `.cur` files instead of stretching 32x32 thumbnails
+          - Fallback seamlessly to system default cursors if registry entries are unset
+          - Bump version to 1.4.0
         files: artifacts/*.exe
         draft: false
         prerelease: false
