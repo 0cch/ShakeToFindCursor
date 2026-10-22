@@ -263,44 +263,61 @@ class AutoStartManager {
 // Cursor utilities class
 class CursorUtils {
  public:
-  static HCURSOR ScaleCursor(HCURSOR src_cursor, double scale_factor) {
-    if (!src_cursor || scale_factor <= 0) {
-      return nullptr;
+  static std::wstring GetRegistryCursorPath(const wchar_t* value_name) {
+    HKEY hkey;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Control Panel\\Cursors", 0, KEY_READ, &hkey) != ERROR_SUCCESS) {
+      return L"";
     }
 
-    ICONINFO icon_info;
-    if (!GetIconInfo(src_cursor, &icon_info)) {
-      return nullptr;
+    wchar_t buffer[MAX_PATH] = {0};
+    DWORD buffer_size = sizeof(buffer);
+    DWORD type = 0;
+    LONG res = RegQueryValueExW(hkey, value_name, nullptr, &type, reinterpret_cast<LPBYTE>(buffer), &buffer_size);
+    RegCloseKey(hkey);
+
+    if (res == ERROR_SUCCESS && (type == REG_SZ || type == REG_EXPAND_SZ)) {
+      wchar_t expanded[MAX_PATH] = {0};
+      ExpandEnvironmentStringsW(buffer, expanded, MAX_PATH);
+      return std::wstring(expanded);
+    }
+    return L"";
+  }
+
+  static HCURSOR LoadCursorFromFileOrSystem(const std::wstring& file_path, LPCWSTR fallback_id, int target_w = 0, int target_h = 0) {
+    if (!file_path.empty()) {
+      UINT flags = LR_LOADFROMFILE;
+      if (target_w == 0 && target_h == 0) {
+        flags |= LR_DEFAULTSIZE;
+      }
+      HCURSOR h = (HCURSOR)LoadImageW(nullptr, file_path.c_str(), IMAGE_CURSOR, target_w, target_h, flags);
+      if (h) return h;
+    }
+    return (HCURSOR)LoadImageW(nullptr, fallback_id, IMAGE_CURSOR, target_w, target_h, (target_w == 0 && target_h == 0) ? (LR_DEFAULTSIZE | LR_SHARED) : LR_SHARED);
+  }
+
+  static HCURSOR ScaleCursor(HCURSOR src_cursor, const std::wstring& file_path, LPCWSTR fallback_id, double scale_factor, int base_w, int base_h) {
+    if (scale_factor <= 1.0001) {
+      return src_cursor;
     }
 
-    // RAII cleanup for bitmap resources returned by GetIconInfo
-    std::unique_ptr<std::remove_pointer<HBITMAP>::type, decltype(&DeleteObject)>
-        color_bitmap(icon_info.hbmColor, DeleteObject);
-    std::unique_ptr<std::remove_pointer<HBITMAP>::type, decltype(&DeleteObject)>
-        mask_bitmap(icon_info.hbmMask, DeleteObject);
+    int target_w = static_cast<int>(std::round(base_w * scale_factor));
+    int target_h = static_cast<int>(std::round(base_h * scale_factor));
+    if (target_w <= 0 || target_h <= 0) return nullptr;
 
-    // Get bitmap dimensions (use color bitmap if available, otherwise mask)
-    BITMAP bm;
-    if (!GetObject(icon_info.hbmColor ? icon_info.hbmColor : icon_info.hbmMask,
-                   sizeof(BITMAP), &bm)) {
-      return nullptr;
+    // Automatically detect and load closest native high-resolution frame from the custom cursor file
+    if (!file_path.empty()) {
+      HCURSOR direct_load = (HCURSOR)LoadImageW(nullptr, file_path.c_str(), IMAGE_CURSOR, target_w, target_h, LR_LOADFROMFILE);
+      if (direct_load) {
+        return direct_load;
+      }
     }
 
-    // For monochrome cursors (hbmColor == NULL), hbmMask height is 2x the
-    // actual cursor height (AND mask + XOR mask stacked vertically).
-    int cursor_height = icon_info.hbmColor ? bm.bmHeight : bm.bmHeight / 2;
+    // Fallback to CopyImage
+    if (src_cursor) {
+      return (HCURSOR)CopyImage(src_cursor, IMAGE_CURSOR, target_w, target_h, 0);
+    }
 
-    int new_width = static_cast<int>(bm.bmWidth * scale_factor);
-    int new_height = static_cast<int>(cursor_height * scale_factor);
-    if (new_width <= 0 || new_height <= 0) return nullptr;
-
-    // Use CopyImage for scaling. Windows handles the alpha channel and mask
-    // bitmap correctly, producing smooth anti-aliased edges when scaling.
-    // CopyImage with IMAGE_CURSOR creates a new cursor scaled to the requested size.
-    HCURSOR scaled = (HCURSOR)CopyImage(src_cursor, IMAGE_CURSOR, new_width,
-                                        new_height, 0);
-
-    return scaled;
+    return nullptr;
   }
 };
 
@@ -315,11 +332,34 @@ HCURSOR GetSystemArrowCursor() {
 // Large cursor class
 class LargeCursor {
  public:
-  LargeCursor(LPCWSTR cursor_name, DWORD system_cursor_id)
-      : system_cursor_id_(system_cursor_id) {
-    original_cursor_ = CopyCursor(LoadCursorW(nullptr, cursor_name));
-    if (!original_cursor_) {
-      throw std::runtime_error("Failed to load system cursor");
+  LargeCursor(const wchar_t* reg_value_name, LPCWSTR fallback_cursor_id, DWORD system_cursor_id)
+      : reg_value_name_(reg_value_name), fallback_cursor_id_(fallback_cursor_id), system_cursor_id_(system_cursor_id) {
+    ReloadOriginalCursor();
+  }
+
+  void ReloadOriginalCursor() {
+    if (original_cursor_) {
+      DestroyCursor(original_cursor_);
+      original_cursor_ = nullptr;
+    }
+
+    cursor_path_ = CursorUtils::GetRegistryCursorPath(reg_value_name_.c_str());
+    original_cursor_ = CursorUtils::LoadCursorFromFileOrSystem(cursor_path_, fallback_cursor_id_);
+
+    base_width_ = GetSystemMetrics(SM_CXCURSOR);
+    base_height_ = GetSystemMetrics(SM_CYCURSOR);
+    if (original_cursor_) {
+      ICONINFO info = {0};
+      if (GetIconInfo(original_cursor_, &info)) {
+        BITMAP bm = {0};
+        HBITMAP bmp = info.hbmColor ? info.hbmColor : info.hbmMask;
+        if (bmp && GetObject(bmp, sizeof(BITMAP), &bm)) {
+          base_width_ = bm.bmWidth;
+          base_height_ = info.hbmColor ? bm.bmHeight : bm.bmHeight / 2;
+        }
+        if (info.hbmColor) DeleteObject(info.hbmColor);
+        if (info.hbmMask) DeleteObject(info.hbmMask);
+      }
     }
   }
 
@@ -329,9 +369,8 @@ class LargeCursor {
       return;
     }
 
-    HCURSOR scaled = CursorUtils::ScaleCursor(original_cursor_, scale_factor);
-    if (scaled && scaled != original_cursor_) {
-      // CopyCursor creates an independent copy that SetSystemCursor can own.
+    HCURSOR scaled = CursorUtils::ScaleCursor(original_cursor_, cursor_path_, fallback_cursor_id_, scale_factor, base_width_, base_height_);
+    if (scaled) {
       HCURSOR cursor_copy = CopyCursor(scaled);
       DestroyCursor(scaled);
       if (cursor_copy) {
@@ -347,8 +386,6 @@ class LargeCursor {
       if (cursor_copy) {
         SetSystemCursor(cursor_copy, system_cursor_id_);
         current_scale_ = 1.0;
-      } else {
-        DestroyCursor(cursor_copy);
       }
     }
   }
@@ -360,8 +397,13 @@ class LargeCursor {
   }
 
  private:
+  std::wstring reg_value_name_;
+  LPCWSTR fallback_cursor_id_;
   DWORD system_cursor_id_;
+  std::wstring cursor_path_;
   HCURSOR original_cursor_ = nullptr;
+  int base_width_ = 32;
+  int base_height_ = 32;
   double current_scale_ = 1.0;
 };
 
@@ -370,28 +412,31 @@ class LargeCursorManager {
  public:
   LargeCursorManager() {
     large_cursors_.push_back(
-        std::make_unique<LargeCursor>(IDC_ARROW, OCR_NORMAL));
+        std::make_unique<LargeCursor>(L"Arrow", IDC_ARROW, OCR_NORMAL));
     large_cursors_.push_back(
-        std::make_unique<LargeCursor>(IDC_IBEAM, OCR_IBEAM));
-    large_cursors_.push_back(std::make_unique<LargeCursor>(IDC_WAIT, OCR_WAIT));
+        std::make_unique<LargeCursor>(L"IBeam", IDC_IBEAM, OCR_IBEAM));
     large_cursors_.push_back(
-        std::make_unique<LargeCursor>(IDC_CROSS, OCR_CROSS));
+        std::make_unique<LargeCursor>(L"Wait", IDC_WAIT, OCR_WAIT));
     large_cursors_.push_back(
-        std::make_unique<LargeCursor>(IDC_UPARROW, OCR_UP));
+        std::make_unique<LargeCursor>(L"Crosshair", IDC_CROSS, OCR_CROSS));
     large_cursors_.push_back(
-        std::make_unique<LargeCursor>(IDC_SIZENWSE, OCR_SIZENWSE));
+        std::make_unique<LargeCursor>(L"UpArrow", IDC_UPARROW, OCR_UP));
     large_cursors_.push_back(
-        std::make_unique<LargeCursor>(IDC_SIZENESW, OCR_SIZENESW));
+        std::make_unique<LargeCursor>(L"SizeNWSE", IDC_SIZENWSE, OCR_SIZENWSE));
     large_cursors_.push_back(
-        std::make_unique<LargeCursor>(IDC_SIZEWE, OCR_SIZEWE));
+        std::make_unique<LargeCursor>(L"SizeNESW", IDC_SIZENESW, OCR_SIZENESW));
     large_cursors_.push_back(
-        std::make_unique<LargeCursor>(IDC_SIZENS, OCR_SIZENS));
+        std::make_unique<LargeCursor>(L"SizeWE", IDC_SIZEWE, OCR_SIZEWE));
     large_cursors_.push_back(
-        std::make_unique<LargeCursor>(IDC_SIZEALL, OCR_SIZEALL));
-    large_cursors_.push_back(std::make_unique<LargeCursor>(IDC_NO, OCR_NO));
-    large_cursors_.push_back(std::make_unique<LargeCursor>(IDC_HAND, OCR_HAND));
+        std::make_unique<LargeCursor>(L"SizeNS", IDC_SIZENS, OCR_SIZENS));
     large_cursors_.push_back(
-        std::make_unique<LargeCursor>(IDC_APPSTARTING, OCR_APPSTARTING));
+        std::make_unique<LargeCursor>(L"SizeAll", IDC_SIZEALL, OCR_SIZEALL));
+    large_cursors_.push_back(
+        std::make_unique<LargeCursor>(L"No", IDC_NO, OCR_NO));
+    large_cursors_.push_back(
+        std::make_unique<LargeCursor>(L"Hand", IDC_HAND, OCR_HAND));
+    large_cursors_.push_back(
+        std::make_unique<LargeCursor>(L"AppStarting", IDC_APPSTARTING, OCR_APPSTARTING));
   }
 
   void ApplyScale(double scale_factor) {
@@ -406,9 +451,16 @@ class LargeCursorManager {
     }
   }
 
+  void ReloadAll() {
+    for (const auto& cursor : large_cursors_) {
+      cursor->ReloadOriginalCursor();
+    }
+  }
+
  private:
   std::vector<std::unique_ptr<LargeCursor>> large_cursors_;
 };
+
 class CursorState {
  public:
   CursorState() {}
