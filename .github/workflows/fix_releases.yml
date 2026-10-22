@@ -1,0 +1,140 @@
+name: Rebuild and Fix Releases
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build_v140:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        arch: [x64, x86]
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: 1879a2eb023312fe81cee890c340a3250b63eafb # Commit of pure v1.4.0
+
+    - name: Set up Visual Studio shell
+      uses: egor-tensin/vs-shell@v2
+      with:
+        arch: ${{ matrix.arch }}
+
+    - name: Create Build Directory
+      run: cmake -E make_directory ${{github.workspace}}/build
+
+    - name: Configure CMake
+      working-directory: ${{github.workspace}}/build
+      run: cmake .. -A ${{ matrix.arch=='x64' && 'x64' || 'Win32' }}
+
+    - name: Build
+      working-directory: ${{github.workspace}}/build
+      run: cmake --build . --config Release
+
+    - name: Package
+      run: |
+        mkdir publish
+        cp build/Release/ShakeToFindCursor.exe "publish/ShakeToFindCursor-${{ matrix.arch }}.exe" || true
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: v140-${{ matrix.arch }}
+        path: publish/*
+
+  release_v140:
+    needs: build_v140
+    runs-on: windows-latest
+    steps:
+    - name: Download Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: v140-*
+        path: artifacts_v140
+        merge-multiple: true
+
+    - name: Restore v1.4.0 Release Files and Changelog
+      uses: softprops/action-gh-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v1.4.0
+        name: "v1.4.0: Support custom cursor themes with high-res multi-frame scaling"
+        body: |
+          v1.4.0: Support custom cursor themes with high-res multi-frame scaling
+
+          - Automatically detect active Windows cursor theme from registry (`HKCU\Control Panel\Cursors`)
+          - Dynamically load highest matching resolution frame from custom `.cur` files instead of stretching 32x32 thumbnails
+          - Fallback seamlessly to system default cursors if registry entries are unset
+          - Bump version to 1.4.0
+        files: artifacts_v140/*.exe
+        draft: false
+        prerelease: false
+
+  build_v141:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        arch: [x64, x86]
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: v1.4.1
+
+    - name: Set up Visual Studio shell
+      uses: egor-tensin/vs-shell@v2
+      with:
+        arch: ${{ matrix.arch }}
+
+    - name: Create Build Directory
+      run: cmake -E make_directory ${{github.workspace}}/build
+
+    - name: Configure CMake
+      working-directory: ${{github.workspace}}/build
+      run: cmake .. -A ${{ matrix.arch=='x64' && 'x64' || 'Win32' }}
+
+    - name: Build
+      working-directory: ${{github.workspace}}/build
+      run: cmake --build . --config Release
+
+    - name: Package
+      run: |
+        mkdir publish
+        cp build/Release/ShakeToFindCursor.exe "publish/ShakeToFindCursor-${{ matrix.arch }}.exe" || true
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: v141-${{ matrix.arch }}
+        path: publish/*
+
+  release_v141:
+    needs: build_v141
+    runs-on: windows-latest
+    steps:
+    - name: Download Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: v141-*
+        path: artifacts_v141
+        merge-multiple: true
+
+    - name: Fix v1.4.1 Release Files and Changelog
+      uses: softprops/action-gh-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v1.4.1
+        name: "v1.4.1: Live cursor scheme reloading"
+        body: |
+          v1.4.1: Live cursor scheme reloading
+
+          - Automatically reload active cursor scheme on the fly when changed in Windows Settings
+          - Listen for WM_SETTINGCHANGE broadcasts to update pointers without needing app restart
+          - Re-query registry dynamically from idle state on mouse shake
+          - Bump version to 1.4.1
+        files: artifacts_v141/*.exe
+        draft: false
+        prerelease: false
