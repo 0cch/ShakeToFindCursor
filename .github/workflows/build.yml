@@ -2,7 +2,6 @@ name: Build & Release
 
 on:
   push:
-    branches: [ "main" ]
     tags:
       - 'v*'
   workflow_dispatch:
@@ -51,25 +50,45 @@ jobs:
     needs: build
     runs-on: windows-latest
     steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
     - name: Download Artifacts
       uses: actions/download-artifact@v4
       with:
         path: artifacts
         merge-multiple: true
 
-    - name: Create or Overwrite Release
+    - name: Extract Tag Message as Release Body
+      id: tag_info
+      shell: bash
+      run: |
+        TAG_NAME="${GITHUB_REF#refs/tags/}"
+        BODY=$(git tag -l --format='%(contents)' "$TAG_NAME")
+        if [ -z "$BODY" ]; then
+          BODY=$(git log -1 --format=%B)
+        fi
+        SUBJECT=$(git tag -l --format='%(contents:subject)' "$TAG_NAME")
+        if [ -z "$SUBJECT" ]; then
+          SUBJECT="$TAG_NAME"
+        fi
+        echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+        echo "subject=$SUBJECT" >> $GITHUB_OUTPUT
+        {
+          echo "body<<EOF"
+          echo "$BODY"
+          echo "EOF"
+        } >> $GITHUB_OUTPUT
+
+    - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: v1.4.0
-        name: "v1.4.0: Support custom cursor themes with high-res multi-frame scaling"
-        body: |
-          ### What's Changed
-          - Automatically detect active Windows cursor theme from registry (`HKCU\Control Panel\Cursors`)
-          - Dynamically load highest matching resolution frame from custom `.cur` files instead of stretching 32x32 thumbnails
-          - Fallback seamlessly to system default cursors if registry entries are unset
-          - Bump version to 1.4.0
+        tag_name: ${{ steps.tag_info.outputs.tag_name }}
+        name: ${{ steps.tag_info.outputs.subject }}
+        body: ${{ steps.tag_info.outputs.body }}
         files: artifacts/*.exe
         draft: false
         prerelease: false
