@@ -474,6 +474,7 @@ class CursorState {
 
   void Enlarge() {
     if (state_ == kIdle) {
+      large_cursor_manager_.ReloadAll();
       state_ = kGrowing;
       enlarge_start_time_ = std::chrono::high_resolution_clock::now();
     } else if (state_ == kShrinking) {
@@ -486,6 +487,10 @@ class CursorState {
       // Re-trigger during hold: extend the hold duration
       enlarge_start_time_ = std::chrono::high_resolution_clock::now();
     }
+  }
+
+  void ReloadCursors() {
+    large_cursor_manager_.ReloadAll();
   }
 
   void RestoreIfNeeded() {
@@ -820,6 +825,14 @@ class ShakeToFindCursor {
         GetWindowLongPtr(hwnd, GWLP_USERDATA));
 
     switch (msg) {
+      case WM_SETTINGCHANGE:
+        if (lParam && (wcscmp(reinterpret_cast<LPCWSTR>(lParam), L"Cursors") == 0 || msg == WM_SETTINGCHANGE)) {
+          if (instance) {
+            instance->cursor_state_.ReloadCursors();
+          }
+        }
+        return 0;
+
       case WM_TIMER:
         if (wParam == CursorConfig::kTimerId && instance) {
           if (instance->tracking_mode_ ==
