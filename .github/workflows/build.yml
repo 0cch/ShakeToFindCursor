@@ -2,7 +2,6 @@ name: Build & Release
 
 on:
   push:
-    branches: [ "main" ]
     tags:
       - 'v*'
   workflow_dispatch:
@@ -57,14 +56,11 @@ jobs:
         path: artifacts
         merge-multiple: true
 
-    - name: Create or Update Release
+    - name: Create Release
       uses: softprops/action-gh-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: latest
-        name: "Latest Build (HD Custom Cursors)"
-        body: "Automated build of ShakeToFindCursor with high-res cursor detection."
         files: artifacts/*.exe
         draft: false
         prerelease: false
