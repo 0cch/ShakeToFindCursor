@@ -1,9 +1,10 @@
-name: Release Build
+name: Build & Release
 
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -46,20 +47,49 @@ jobs:
         path: publish/*
 
   release:
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: windows-latest
     steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
     - name: Download Artifacts
       uses: actions/download-artifact@v4
       with:
         path: artifacts
         merge-multiple: true
 
-    - name: Create Release
-      uses: softprops/action-gh-release@v1
+    - name: Extract Tag Message as Release Body
+      id: tag_info
+      shell: bash
+      run: |
+        TAG_NAME="${GITHUB_REF#refs/tags/}"
+        BODY=$(git tag -l --format='%(contents)' "$TAG_NAME")
+        if [ -z "$BODY" ]; then
+          BODY=$(git log -1 --format=%B)
+        fi
+        SUBJECT=$(git tag -l --format='%(contents:subject)' "$TAG_NAME")
+        if [ -z "$SUBJECT" ]; then
+          SUBJECT="$TAG_NAME"
+        fi
+        echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+        echo "subject=$SUBJECT" >> $GITHUB_OUTPUT
+        {
+          echo "body<<EOF"
+          echo "$BODY"
+          echo "EOF"
+        } >> $GITHUB_OUTPUT
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
+        tag_name: ${{ steps.tag_info.outputs.tag_name }}
+        name: ${{ steps.tag_info.outputs.subject }}
+        body: ${{ steps.tag_info.outputs.body }}
         files: artifacts/*.exe
         draft: false
         prerelease: false
